@@ -1,2 +1,2 @@
 make:
-	g++ -std=c++11 -o edgeDetector main.cpp
+	g++ -o edgeDetector main.cpp

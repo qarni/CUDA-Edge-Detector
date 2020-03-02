@@ -1,69 +1,81 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <stdio.h>
-#include <stdlib.h>
-#include <png.h>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 
-void readInFile(string filename);
+int** readImageMatrix(const char * filename, int * width, int * height);
 
-int main(int argc, const char *argv[])
+int main(int argc, const char **argv)
 {
-
     if (argc != 2)
-    {
         cout << "need to include name of image file" << endl;
-    }
 
-    string filename = argv[1];
-    cout << "Proceeding edge detection with file: " << filename << endl;
+    cout << "Proceeding edge detection with file: " << argv[1] << endl;
 
-    readInFile(filename);
+    int** matrix;
+    int width, height;
+
+    matrix = readImageMatrix(argv[1], &width, &height);
+
+    for (int i=0; i < width; i++)
+        free(matrix[i]);
+    free(matrix);
 
     return 0;
 }
 
+
 /*
-Opens the png file
+Turns image matrix text file into a 2d int array
 
-TODO:
-1 - make sure that it is a png file
-2 - make sure that it is black and white
-3 - get the file dimensions 
+first line of file is the width and height
+following is pixel data
+
+all is tab delimited with new lines for new rows
+
 */
-void readInFile(char* filename)
-{
+int** readImageMatrix(const char * filename, int * width, int * height) {
 
-    int width, height;
-png_byte color_type;
-png_byte bit_depth;
-png_bytep *row_pointers = NULL;
+    string currline;
+    ifstream file;
+    string token;
+    
+    file.open(filename);
 
-    // ifstream file;
-    // file.open(filename);
+    // first line, get the width and height
+    getline(file, currline, '\t'); 
+    stringstream linestream(currline);
+    getline(linestream, token,'\t');
+    *width = stoi(token);
+    getline(linestream, token,'\t');
+    *height = stoi(token);
 
-    FILE *fp = fopen(filename, "rb");
+    cout << "width: " << *width << " height: " << *height << endl;
 
-    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    // if (!png)
-    //     abort();
+    int** matrix = (int **) malloc(sizeof(int *) * (*width)); 
+    for (int i = 0; i < *width; i++) 
+         matrix[i] = (int*) malloc((*height) * sizeof(int)); 
 
-    // png_infop info = png_create_info_struct(png);
-    // if (!info)
-    //     abort();
+    int row = 0;
+    int col = 0;
 
-    // if (setjmp(png_jmpbuf(png)))
-    //     abort();
+    getline(file, currline);    // throw away for some reason 
 
-    // png_init_io(png, fp);
+    while(getline(file, currline)) {
+        stringstream linestream(currline);
+        col= 0;
+        while(getline(linestream, token,'\t'))
+        {
+            matrix[row][col] = stoi(token);
+            col++;
+        }
+        row++;
 
-    // png_read_info(png, info);
+    }
 
-    // width = png_get_image_width(png, info);
-    // height = png_get_image_height(png, info);
-    // color_type = png_get_color_type(png, info);
-    // bit_depth = png_get_bit_depth(png, info);
-
+    file.close();
+    return matrix;
 }
