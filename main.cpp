@@ -3,6 +3,9 @@
 #include <string>
 #include <iomanip>
 #include <sstream>
+#include <cstdlib>
+
+#include <cuda_runtime.h>
 
 using namespace std;
 
@@ -42,6 +45,7 @@ int** readImageMatrix(const char * filename, int * width, int * height) {
     string currline;
     ifstream file;
     string token;
+    int t;
     
     file.open(filename);
 
@@ -49,9 +53,13 @@ int** readImageMatrix(const char * filename, int * width, int * height) {
     getline(file, currline, '\t'); 
     stringstream linestream(currline);
     getline(linestream, token,'\t');
-    *width = stoi(token);
+    stringstream ss(token);
+    ss >> t;
+    *width = t;
     getline(linestream, token,'\t');
-    *height = stoi(token);
+    stringstream ss2(token);
+    ss2 >> t;
+    *height = t;
 
     cout << "width: " << *width << " height: " << *height << endl;
 
@@ -69,7 +77,9 @@ int** readImageMatrix(const char * filename, int * width, int * height) {
         col= 0;
         while(getline(linestream, token,'\t'))
         {
-            matrix[row][col] = stoi(token);
+            stringstream ss(token);
+            ss >> t;
+            matrix[row][col] = t;
             col++;
         }
         row++;
