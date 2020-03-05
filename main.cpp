@@ -5,29 +5,54 @@
 #include <sstream>
 #include <cstdlib>
 
-#include <cuda_runtime.h>
+#include <cuda.h>
+#include <cutil.h>
+
+#include "canny.h"
 
 using namespace std;
 
+int** allocateMatrix(int height, int width);
 int** readImageMatrix(const char * filename, int * width, int * height);
 
 int main(int argc, const char **argv)
 {
-    if (argc != 2)
+    if (argc != 2) {
         cout << "need to include name of image file" << endl;
+        return -1;
+    }
 
     cout << "Proceeding edge detection with file: " << argv[1] << endl;
 
-    int** matrix;
     int width, height;
 
-    matrix = readImageMatrix(argv[1], &width, &height);
+    // get image as a 2D int array
+    int** input = readImageMatrix(argv[1], &width, &height);
+    int** output = allocateMatrix(height, width);
 
-    for (int i=0; i < width; i++)
-        free(matrix[i]);
-    free(matrix);
+    canny(input, height, width, output, 5, 1);
+
+    // test
+    cout << "in " << input[1][1] << " out " << output[1][1] << endl;
+
+    // free matrices
+    for (int i=0; i < width; i++){
+        free(input[i]);
+        free(output[i]);
+    }
+    free(input);
+    free(output);
 
     return 0;
+}
+
+
+int** allocateMatrix(int height, int width) {
+    int** matrix = (int **) malloc(sizeof(int *) * (width) * height); 
+    for (int i = 0; i < width; i++) 
+         matrix[i] = (int*) malloc((height) * sizeof(int)); 
+
+    return matrix;
 }
 
 
@@ -63,9 +88,7 @@ int** readImageMatrix(const char * filename, int * width, int * height) {
 
     cout << "width: " << *width << " height: " << *height << endl;
 
-    int** matrix = (int **) malloc(sizeof(int *) * (*width)); 
-    for (int i = 0; i < *width; i++) 
-         matrix[i] = (int*) malloc((*height) * sizeof(int)); 
+    int ** matrix = allocateMatrix(*height, *width);
 
     int row = 0;
     int col = 0;
