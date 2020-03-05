@@ -30,10 +30,51 @@ int main(int argc, const char **argv)
     int** input = readImageMatrix(argv[1], &width, &height);
     int** output = allocateMatrix(height, width);
 
+     for (int i = 0; i < height; i++)
+    {
+       for (int j = 0; j < width; j++)
+       {
+           output[i][j]= -1;
+       }
+       
+    }
+
     canny(input, height, width, output, 5, 1);
 
     // test
     cout << "in " << input[1][1] << " out " << output[1][1] << endl;
+
+    int32_t count = 0;
+    //test 2
+    for (int i = 0; i < height; i++)
+    {
+       for (int j = 0; j < width; j++)
+       {
+        //    cout << output[i][j] << " ";
+           if(output[i][j] == -2) {
+            count++;
+           }
+       }
+       
+    }
+
+    cout << endl << "count: " << count << endl;
+
+    //test 3
+    for (int i = 0; i < height; i++)
+    {
+       for (int j = 0; j < width; j++)
+       {
+           if(input[i][j] != output[i][j]) {
+               cout << "FAILED" << " i " << i << " j " << j << endl;
+               goto jump;
+           }
+       }
+       
+    }
+
+    jump:
+    
 
     // free matrices
     for (int i=0; i < width; i++){

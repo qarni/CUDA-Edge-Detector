@@ -11,7 +11,7 @@
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
-__global__ void GaussianBlur(int* input, int* output, int kernelSize);
+__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count);
 
 
 // ------------------------------------------------------------------------------------
@@ -29,21 +29,41 @@ void canny(int** input, int height, int width, int** output, int kernelSize,  in
     int* outputD = AllocateDeviceMemory(output, matrixSize);
     float* filterD;
     cudaMalloc(&filterD, kernelSize * kernelSize * sizeof(float));
+    int32_t count = 0;
+    int32_t* countD;
+    cudaMalloc(&countD, sizeof(int32_t));
+    
     CopyToDevice(&(input[0][0]), inputD, matrixSize);
-    CopyToDevice(&(input[0][0]), outputD, matrixSize);
+    CopyToDevice(&(output[0][0]), outputD, matrixSize);
     CopyToDevice(&filter, filterD, kernelSize * kernelSize * sizeof(float));
+    CopyToDevice(&count, countD, sizeof(int32_t));
 
+    for (int i = 0; i < height; i++)
+    {
+       for (int j = 0; j < width; j++)
+       {
+           output[i][j]= -2;
+       }
+       
+    }
 
+    dim3 threadsPerBlock(8, 8);
+    dim3 numBlocks(300, 300);
 
+    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, outputD, filterD, kernelSize, countD);
 
+    cudaThreadSynchronize();
 
     // tear down after kernel calls are done
     CopyFromDevice(outputD, &(output[0][0]), matrixSize);
+    CopyFromDevice(countD, &count, sizeof(int32_t));
     cudaFree(inputD);
     cudaFree(outputD);
     cudaFree(filterD);
+    cudaFree(countD);
 
     printf("done with canny algorithm\n");
+    printf("count: %d\n", count);
 }
 
 /*
@@ -82,9 +102,22 @@ Start with kernel size of 5?
 
 
 */
-__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize) {
+__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count) {
 
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
 
+    int val = getPixelVal(input, 2400, 2400, row, col);
+    if(val == -1)
+        return;
+
+    output[2400 * row + col] = val;
+
+    __syncthreads();
+
+    atomicAdd(count, 1);
+
+    // __syncthreads();
 
 }
 
@@ -103,8 +136,10 @@ origAddress + (width * row + col)
 __device__ int getPixelVal(int* image, int height, int width, int row, int col) {
     if (col < height && row < width && col >= 0 && row >= 0)
         return *(image + width * row + col);
-    else
+    else{
+        printf("CRAP");
         return -1;
+    }
 }
 
 // helper functions -------------------------------------------------------------------
