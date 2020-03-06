@@ -11,7 +11,7 @@
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
-__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count);
+__global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count);
 
 
 // ------------------------------------------------------------------------------------
@@ -19,7 +19,7 @@ __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int
 /*
 Wrapper function to make kernel calls to perform canny algorithm 
 */
-void canny(int** input, int height, int width, int** output, int kernelSize,  int sigma) {
+void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma) {
 
     int matrixSize = height * width * sizeof(int);
     float* filter  = generateGaussianFilter(kernelSize, sigma);
@@ -33,36 +33,42 @@ void canny(int** input, int height, int width, int** output, int kernelSize,  in
     int32_t* countD;
     cudaMalloc(&countD, sizeof(int32_t));
     
-    CopyToDevice(&(input[0][0]), inputD, matrixSize);
-    CopyToDevice(&(output[0][0]), outputD, matrixSize);
+    CopyToDevice(&(input[0]), inputD, matrixSize);
+    CopyToDevice(&(output[0]), outputD, matrixSize);
     CopyToDevice(&filter, filterD, kernelSize * kernelSize * sizeof(float));
     CopyToDevice(&count, countD, sizeof(int32_t));
+
+    printf("input before: %d\5n",sizeof(input));
 
     for (int i = 0; i < height; i++)
     {
        for (int j = 0; j < width; j++)
        {
-           output[i][j]= -2;
+           output[width * i + j]= -2;
+        //    printf("row: %d, col %d, val: %d address: %lx\n", i, j, input[width * i + j], input + width * i + j);
        }
-       
     }
+
+    // 2400 = 8  * 300
+    // 600  = 8 * 75
+    // 4 = 1  * 4
 
     dim3 threadsPerBlock(8, 8);
     dim3 numBlocks(300, 300);
 
-    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, outputD, filterD, kernelSize, countD);
+    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, outputD, height, width, filterD, kernelSize, countD);
 
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done
-    CopyFromDevice(outputD, &(output[0][0]), matrixSize);
+    CopyFromDevice(outputD, &(output[0]), matrixSize);
     CopyFromDevice(countD, &count, sizeof(int32_t));
     cudaFree(inputD);
     cudaFree(outputD);
     cudaFree(filterD);
     cudaFree(countD);
 
-    printf("done with canny algorithm\n");
+    printf("\n\ndone with canny algorithm\n");
     printf("count: %d\n", count);
 }
 
@@ -102,16 +108,19 @@ Start with kernel size of 5?
 
 
 */
-__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count) {
+__global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count) {
 
     int row = (blockIdx.x * blockDim.x) + threadIdx.x;
     int col = (blockIdx.y * blockDim.y) + threadIdx.y;
 
-    int val = getPixelVal(input, 2400, 2400, row, col);
+    int val = getPixelVal(input, height, width, row, col);
     if(val == -1)
         return;
+    else  {
+        // printf("row: %d, col %d, val: %d address: %lx\n", row, col, val, input + (width * row + col));
+    }
 
-    output[2400 * row + col] = val;
+    output[width * row + col] = val;
 
     __syncthreads();
 
@@ -144,7 +153,7 @@ __device__ int getPixelVal(int* image, int height, int width, int row, int col) 
 
 // helper functions -------------------------------------------------------------------
 
-int* AllocateDeviceMemory (int** matrix, int size){
+int* AllocateDeviceMemory (int* matrix, int size){
     int* res;
 
     cudaMalloc(&res, size);
