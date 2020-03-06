@@ -40,7 +40,7 @@ int main(int argc, const char **argv)
        
     }
 
-    cout << endl << endl;
+    // cout << endl << endl;
 
     canny(input, height, width, output, 5, 1);
 
@@ -50,7 +50,7 @@ int main(int argc, const char **argv)
     // test
     cout << "in " << input[1] << " out " << output[1] << endl;
 
-    int32_t count = 0;
+    // int32_t count = 0;
     //test 2
     // for (int i = 0; i < height; i++)
     // {
@@ -65,7 +65,7 @@ int main(int argc, const char **argv)
        
     // }
 
-    cout << endl << "count: " << count << endl;
+    // cout << endl << "count: " << count << endl;
     
     free(input);
     free(output);
@@ -163,7 +163,7 @@ int* readImageMatrix1D(const char * filename, int * width, int * height) {
     int row = 0;
     int col = 0;
 
-    cout << "ok!" << endl;
+    // cout << "ok!" << endl;
 
     getline(file, currline);    // throw away for some reason 
     
@@ -184,7 +184,7 @@ int* readImageMatrix1D(const char * filename, int * width, int * height) {
 
     }
 
-    cout << "done" << row << col << endl;
+    // cout << "done" << row << col << endl;
 
     file.close();
     return matrix;

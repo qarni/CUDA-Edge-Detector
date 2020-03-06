@@ -12,13 +12,13 @@
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
-__global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count);
+__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
 __global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width);
 
 // ------------------------------------------------------------------------------------
 
 /*
-Wrapper function to make kernel calls to perform canny algorithm 
+* Wrapper function to make kernel calls to perform canny algorithm 
 */
 void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma) {
 
@@ -50,10 +50,12 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     // 600x384 = 8,8 x 75, 48
     //384 = 8 * 48
 
+    // TODO: cleanup later
+    // only works for images that are square and divisible by 64
     dim3 threadsPerBlock(8, 8);
-    dim3 numBlocks(48, 48);
+    dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
 
-    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, height, width, filterD, kernelSize, countD);
+    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
     FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, outputD, gradientDirD, height, width);
@@ -75,10 +77,9 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 }
 
 /*
-This is the guassian filter to be applied over each pixel in the image
-
-
-G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
+* This is the guassian filter to be applied over each pixel in the image
+*
+* G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
 */
 float*  generateGaussianFilter(int kernelSize, int sigma) {
 
@@ -102,17 +103,17 @@ float*  generateGaussianFilter(int kernelSize, int sigma) {
 // kernel functions --------------------------------------------------------------------
 
 /*
-Noise reduction - gets rid of background noise but still keeps borders more in focus so they 
-can be detected in the next step
-
-Apply gaussian filter over each pixel 
-Start with kernel size of 5?
-
-For the borders of the image (anything less than the size of the kernel away from an edge)
-Just use the original vals of the image
-
+* Noise reduction - gets rid of background noise but still keeps borders more in focus so they 
+* can be detected in the next step
+*
+* Apply gaussian filter over each pixel 
+* Start with kernel size of 5?
+*
+* For the borders of the image (anything less than the size of the kernel away from an edge)
+* Just use the original vals of the image
+*
 */
-__global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count) {
+__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width) {
 
     int row = (blockIdx.x * blockDim.x) + threadIdx.x;
     int col = (blockIdx.y * blockDim.y) + threadIdx.y;
@@ -151,17 +152,17 @@ __global__ void GaussianBlur(int* input, int* output, int height, int width, flo
 }
 
 /*
-Find gradients - this is the step that actually detects edges (roughly)
-
-Very similar to previous step, just need to apply Sobel filters this time
-
-Kx = -1 0 1 -2 0 2 -1 0 1
-Ky = 1 2 1 0 0 0 -1 -2 -1
-
-Magnitude G = sqrt(Ix^2 + Iy^2)
-
-Also need this data for later:
-slope O grad = arctan(Iy/Ix)
+* Find gradients - this is the step that actually detects edges (roughly)
+*
+*Very similar to previous step, just need to apply Sobel filters this time
+*
+* Kx = -1 0 1 -2 0 2 -1 0 1
+* Ky = 1 2 1 0 0 0 -1 -2 -1
+*
+* Magnitude G = sqrt(Ix^2 + Iy^2)
+*
+* Also need this data for later:
+* slope O grad = arctan(Iy/Ix)
 */
 __global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width) {
 
@@ -212,12 +213,12 @@ __global__ void FindGradients(int* input, int* output, float* gradientDir, int h
 // can only be called from global func or from another device func, not from host
 
 /*
-returns pixel value at a location 
-Maps a 2d image to a 1d list
-
-if error, returns -1
-
-origAddress + (width * row + col)
+* returns pixel value at a location 
+* Maps a 2d image to a 1d list
+*
+* if error, returns -1
+*
+* origAddress + (width * row + col)
 */
 __device__ int getPixelVal(int* image, int height, int width, int row, int col) {
     if (col < height && row < width && col >= 0 && row >= 0)
