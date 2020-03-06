@@ -13,8 +13,8 @@
 using namespace std;
 
 int* allocateMatrix(int height, int width);
-int** readImageMatrix(const char * filename, int * width, int * height);
 int* readImageMatrix1D(const char * filename, int * width, int * height);
+void writeMatrixToFile(int* matrix, const char * filename, int width, int height);
 
 int main(int argc, const char **argv)
 {
@@ -44,6 +44,9 @@ int main(int argc, const char **argv)
 
     canny(input, height, width, output, 5, 1);
 
+    // write output to a file so we can open as an image in matlab!
+    writeMatrixToFile(output, "output_matrix/output.txt", width, height);
+
     // test
     cout << "in " << input[1] << " out " << output[1] << endl;
 
@@ -64,20 +67,20 @@ int main(int argc, const char **argv)
 
     cout << endl << "count: " << count << endl;
 
-    //test 3
-    for (int i = 0; i < height; i++)
-    {
-       for (int j = 0; j < width; j++)
-       {
-           if(input[width * i + j] != output[width * i + j]) {
-               cout << "FAILED" << " i " << i << " j " << j << endl;
-               goto jump;
-           }
-       }
-    }
-    cout << "PASSED" << endl;
+    // //test 3
+    // for (int i = 0; i < height; i++)
+    // {
+    //    for (int j = 0; j < width; j++)
+    //    {
+    //        if(input[width * i + j] != output[width * i + j]) {
+    //            cout << "FAILED" << " i " << i << " j " << j << endl;
+    //            goto jump;
+    //        }
+    //    }
+    // }
+    // cout << "PASSED" << endl;
 
-    jump:
+    // jump:
     
     free(input);
     free(output);
@@ -93,7 +96,7 @@ int* allocateMatrix(int height, int width) {
 
 
 /*
-Turns image matrix text file into a 2d int array
+Turns image matrix text file into a 1d int array
 
 first line of file is the width and height
 following is pixel data
@@ -200,4 +203,24 @@ int* readImageMatrix1D(const char * filename, int * width, int * height) {
 
     file.close();
     return matrix;
+}
+
+/*
+Turns 1d int array (representing a 2d image) into a file
+
+tab delimited with new lines for new rows
+*/
+void writeMatrixToFile(int* matrix, const char * filename, int width, int height) {
+   
+    ofstream file (filename);
+        for (int row = 0; row < width; row++) {
+            for(int col = 0; col < height; col++) {
+                if(col == height - 1)
+                    file << matrix[width * row + col] << "\n";
+                else
+                    file << matrix[width * row + col] << "\t";
+            }
+        }
+        file.close();
+
 }

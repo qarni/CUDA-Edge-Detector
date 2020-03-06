@@ -35,7 +35,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     
     CopyToDevice(&(input[0]), inputD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
-    CopyToDevice(&filter, filterD, kernelSize * kernelSize * sizeof(float));
+    CopyToDevice(&(filter[0]), filterD, kernelSize * kernelSize * sizeof(float));
     CopyToDevice(&count, countD, sizeof(int32_t));
 
     // set up dimensions for call to the kernel
@@ -45,7 +45,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     // 4 = 1  * 4
 
     dim3 threadsPerBlock(8, 8);
-    dim3 numBlocks(75, 75);
+    dim3 numBlocks(300, 300);
 
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, outputD, height, width, filterD, kernelSize, countD);
 
@@ -97,6 +97,8 @@ can be detected in the next step
 Apply gaussian filter over each pixel 
 Start with kernel size of 5?
 
+For the borders of the image (anything less than the size of the kernel away from an edge)
+Just use the original vals of the image
 
 */
 __global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count) {
@@ -104,11 +106,34 @@ __global__ void GaussianBlur(int* input, int* output, int height, int width, flo
     int row = (blockIdx.x * blockDim.x) + threadIdx.x;
     int col = (blockIdx.y * blockDim.y) + threadIdx.y;
 
-    int val = getPixelVal(input, height, width, row, col);
-    if(val == -1)
-        return;
+    output[width * row + col] = -5;
 
-    output[width * row + col] = val;
+    int val = getPixelVal(input, height, width, row, col);
+    if(val == -1){
+        return;
+    }
+        
+    int kernelHalf = kernelSize/2;
+
+    // account for borders of the image which can't have the filter applied to them
+    if(row < kernelHalf || col < kernelHalf || row > width - 1 - kernelHalf || col > height - 1 - kernelHalf) {
+        output[width * row + col] = val;
+        // printf("doop");
+    }
+    // otherwise, apply the filter!
+    else {
+
+        float filteredVal = 0.0;
+        int f = 0;
+        for(int krow = -kernelHalf; krow <= kernelHalf; krow++) {
+            for(int kcol = -kernelHalf; kcol <= kernelHalf; kcol++) {
+                filteredVal += (float)getPixelVal(input, height, width, row + krow, col + kcol) * gaussianFilter[f];
+                f++;
+            }
+        }
+        
+        output[width * row + col] = (int)filteredVal;
+    }
 
     __syncthreads();
 
