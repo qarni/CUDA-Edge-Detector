@@ -38,23 +38,14 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     CopyToDevice(&filter, filterD, kernelSize * kernelSize * sizeof(float));
     CopyToDevice(&count, countD, sizeof(int32_t));
 
-    printf("input before: %d\5n",sizeof(input));
-
-    for (int i = 0; i < height; i++)
-    {
-       for (int j = 0; j < width; j++)
-       {
-           output[width * i + j]= -2;
-        //    printf("row: %d, col %d, val: %d address: %lx\n", i, j, input[width * i + j], input + width * i + j);
-       }
-    }
+    // set up dimensions for call to the kernel
 
     // 2400 = 8  * 300
     // 600  = 8 * 75
     // 4 = 1  * 4
 
     dim3 threadsPerBlock(8, 8);
-    dim3 numBlocks(300, 300);
+    dim3 numBlocks(75, 75);
 
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, outputD, height, width, filterD, kernelSize, countD);
 
@@ -116,18 +107,12 @@ __global__ void GaussianBlur(int* input, int* output, int height, int width, flo
     int val = getPixelVal(input, height, width, row, col);
     if(val == -1)
         return;
-    else  {
-        // printf("row: %d, col %d, val: %d address: %lx\n", row, col, val, input + (width * row + col));
-    }
 
     output[width * row + col] = val;
 
     __syncthreads();
 
     atomicAdd(count, 1);
-
-    // __syncthreads();
-
 }
 
 
