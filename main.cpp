@@ -66,21 +66,6 @@ int main(int argc, const char **argv)
     // }
 
     cout << endl << "count: " << count << endl;
-
-    // //test 3
-    // for (int i = 0; i < height; i++)
-    // {
-    //    for (int j = 0; j < width; j++)
-    //    {
-    //        if(input[width * i + j] != output[width * i + j]) {
-    //            cout << "FAILED" << " i " << i << " j " << j << endl;
-    //            goto jump;
-    //        }
-    //    }
-    // }
-    // cout << "PASSED" << endl;
-
-    // jump:
     
     free(input);
     free(output);

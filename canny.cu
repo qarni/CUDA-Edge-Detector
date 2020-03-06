@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include <cutil.h>
 #include "canny.h"
@@ -20,6 +21,8 @@ __global__ void GaussianBlur(int* input, int* output, int height, int width, flo
 Wrapper function to make kernel calls to perform canny algorithm 
 */
 void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma) {
+
+    clock_t before = clock();
 
     int matrixSize = height * width * sizeof(int);
     float* filter  = generateGaussianFilter(kernelSize, sigma);
@@ -61,6 +64,11 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 
     printf("\n\ndone with canny algorithm\n");
     printf("count: %d\n", count);
+
+    clock_t difference = clock() - before;
+    int msec = difference * 1000 / CLOCKS_PER_SEC;
+    printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+
 }
 
 /*
