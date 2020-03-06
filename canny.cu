@@ -13,7 +13,7 @@
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
 __global__ void GaussianBlur(int* input, int* output, int height, int width, float* gaussianFilter, int kernelSize, int32_t* count);
-__global__ void FindGradients(int* input, int* output, int height, int width);
+__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width);
 
 // ------------------------------------------------------------------------------------
 
@@ -28,15 +28,17 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     float* filter  = generateGaussianFilter(kernelSize, sigma);
 
     // set up for kernel calls 
-    float* filterD;
+    
     int32_t count = 0;
-    int32_t* countD;
+    
 
-    int* inputD = AllocateDeviceMemory(matrixSize);
-    int* gaussianBlurD = AllocateDeviceMemory(matrixSize);
-    int* outputD = AllocateDeviceMemory(matrixSize);
-    cudaMalloc(&filterD, kernelSize * kernelSize * sizeof(float));
-    cudaMalloc(&countD, sizeof(int32_t));
+    int* inputD = (int*)AllocateDeviceMemory(matrixSize);
+    int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);
+    float* gradientDirD = (float*)AllocateDeviceMemory(matrixSize);
+    int* outputD = (int*)AllocateDeviceMemory(matrixSize);
+    
+    float* filterD = (float*)AllocateDeviceMemory(kernelSize * kernelSize * sizeof(float));
+    int32_t* countD = (int32_t*)AllocateDeviceMemory(sizeof(int32_t));
     
     CopyToDevice(&(input[0]), inputD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
@@ -55,7 +57,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, height, width, filterD, kernelSize, countD);
     cudaThreadSynchronize();
 
-    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, outputD, height, width);
+    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, outputD, gradientDirD, height, width);
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
@@ -163,9 +165,8 @@ Also need this data for later:
 
 Magnitude G = sqrt(Ix^2 + Iy^2)
 slope O grad = arctan(Iy/Ix)
-
 */
-__global__ void FindGradients(int* input, int* output, int height, int width) {
+__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width) {
 
     // sobel filters. Apply both!
     int Kx[] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
@@ -202,6 +203,7 @@ __global__ void FindGradients(int* input, int* output, int height, int width) {
         output[width * row + col] = (int)sobel;
 
         // TODO: calc gradient direction
+        gradientDir[width * row + col] = atan(filteredValX/filteredValY);
     }
 
     __syncthreads();
@@ -230,8 +232,8 @@ __device__ int getPixelVal(int* image, int height, int width, int row, int col) 
 
 // helper functions -------------------------------------------------------------------
 
-int* AllocateDeviceMemory (int size){
-    int* res;
+void* AllocateDeviceMemory (int size){
+    void* res;
     cudaMalloc(&res, size);
     return res;
 }
