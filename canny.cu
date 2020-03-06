@@ -27,10 +27,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     int matrixSize = height * width * sizeof(int);
     float* filter  = generateGaussianFilter(kernelSize, sigma);
 
-    // set up for kernel calls 
-    
     int32_t count = 0;
-    
 
     int* inputD = (int*)AllocateDeviceMemory(matrixSize);
     int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);
@@ -50,9 +47,11 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     // 2400 = 8  * 300
     // 600  = 8 * 75
     // 4 = 1  * 4
+    // 600x384 = 8,8 x 75, 48
+    //384 = 8 * 48
 
     dim3 threadsPerBlock(8, 8);
-    dim3 numBlocks(300, 300);
+    dim3 numBlocks(48, 48);
 
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, height, width, filterD, kernelSize, countD);
     cudaThreadSynchronize();
@@ -69,12 +68,10 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     cudaFree(countD);
 
     printf("\n\ndone with canny algorithm\n");
-    printf("count: %d\n", count);
 
     clock_t difference = clock() - before;
     int msec = difference * 1000 / CLOCKS_PER_SEC;
     printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
-
 }
 
 /*
@@ -161,9 +158,9 @@ Very similar to previous step, just need to apply Sobel filters this time
 Kx = -1 0 1 -2 0 2 -1 0 1
 Ky = 1 2 1 0 0 0 -1 -2 -1
 
-Also need this data for later:
-
 Magnitude G = sqrt(Ix^2 + Iy^2)
+
+Also need this data for later:
 slope O grad = arctan(Iy/Ix)
 */
 __global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width) {
@@ -200,9 +197,10 @@ __global__ void FindGradients(int* input, int* output, float* gradientDir, int h
 
         float sobel = sqrt(pow(filteredValX, 2) + pow(filteredValY, 2));
         
+        // sobel filter output
         output[width * row + col] = (int)sobel;
 
-        // TODO: calc gradient direction
+        //calc gradient direction
         gradientDir[width * row + col] = atan(filteredValX/filteredValY);
     }
 
