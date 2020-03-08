@@ -29,9 +29,13 @@ int main(int argc, const char **argv)
 
     // get image as a 1D int array
     int* input = readImageMatrix1D(argv[1], &width, &height);
+    int* gaussianBlur = allocateMatrix(height, width);
+    int* Ix = allocateMatrix(height, width);
+    int* Iy = allocateMatrix(height, width);
+    int* gradientMag = allocateMatrix(height, width);
     int* output = allocateMatrix(height, width);
 
-     for (int i = 0; i < height; i++)
+    for (int i = 0; i < height; i++)
     {
        for (int j = 0; j < width; j++)
        {
@@ -40,34 +44,28 @@ int main(int argc, const char **argv)
        
     }
 
-    // cout << endl << endl;
+    if(canny(input, gaussianBlur, Ix, Iy, gradientMag, output, height, width, 5, 1) != -1) {
+        // write output to a file so we can open as an image in matlab!
+        // write each step so we can compare
+        writeMatrixToFile(input, "output_matrix/input.txt", width, height);
+        writeMatrixToFile(gaussianBlur, "output_matrix/gaussianBlur.txt", width, height);
+        writeMatrixToFile(Ix, "output_matrix/Ix.txt", width, height);
+        writeMatrixToFile(Iy, "output_matrix/Iy.txt", width, height);
+        writeMatrixToFile(gradientMag, "output_matrix/gradientMag.txt", width, height);
+        writeMatrixToFile(output, "output_matrix/output.txt", width, height);
 
-    canny(input, height, width, output, 5, 1);
-
-    // write output to a file so we can open as an image in matlab!
-    writeMatrixToFile(output, "output_matrix/output.txt", width, height);
-
-    // test
-    cout << "in " << input[1] << " out " << output[1] << endl;
-
-    // int32_t count = 0;
-    //test 2
-    // for (int i = 0; i < height; i++)
-    // {
-    //    for (int j = 0; j < width; j++)
-    //    {
-
-    //        cout << output[width * i + j] << "-" << input[width * i + j] << " ";
-    //        if(output[width * i + j] == -2) {
-    //         count++;
-    //        }
-    //    }
-       
-    // }
-
-    // cout << endl << "count: " << count << endl;
+        // test
+        cout << "in " << input[1] << " out " << output[1] << endl;
+    }
+    else {
+        cout << "something went wrong :( goodbye" << endl;
+    }
     
     free(input);
+    free(gaussianBlur);
+    free(Ix);
+    free(Iy);
+    free(gradientMag);
     free(output);
 
     return 0;

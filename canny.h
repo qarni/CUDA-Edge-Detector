@@ -1,7 +1,7 @@
 #ifndef _CANNY_H_
 #define _CANNY_H_
 
-void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma);
+int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* output, int height, int width, int kernelSize,  int sigma);
 float*  generateGaussianFilter(int kernelSize, int sigma);
 
 void* AllocateDeviceMemory (int size);

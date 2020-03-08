@@ -9,19 +9,20 @@
 #include "canny.h"
 
 // kernel function definitions
-
-// device function defintions 
-__device__ int getPixelVal(int* image, int height, int width, int x, int y);
 __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
 __global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width);
 __global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,  int* Ix, int* Iy, int height, int width);
+
+// device function defintions 
+__device__ int getPixelVal(int* image, int height, int width, int x, int y);
 
 // ------------------------------------------------------------------------------------
 
 /*
 * Wrapper function to make kernel calls to perform canny algorithm 
 */
-void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma) {
+int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* output, 
+    int height, int width, int kernelSize,  int sigma) {
 
     clock_t before = clock();
 
@@ -30,25 +31,29 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 
     int32_t count = 0;
 
-    int* gradientDir = (int*)malloc(sizeof(int) * height * width);
-
-    int* inputD = (int*)AllocateDeviceMemory(matrixSize);
+    int* inputD = (int*)AllocateDeviceMemory(matrixSize);               // print
     
-    int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);
+    int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);        // print
     int* gradientDirD = (int*)AllocateDeviceMemory(matrixSize);
-    int* IxD = (int*)AllocateDeviceMemory(matrixSize);
-    int* IyD = (int*)AllocateDeviceMemory(matrixSize);
+    int* IxD = (int*)AllocateDeviceMemory(matrixSize);                  // print
+    int* IyD = (int*)AllocateDeviceMemory(matrixSize);                  // print
 
-    int* gradientMagnitudeD = (int*)AllocateDeviceMemory(matrixSize);
-    int* outputD = (int*)AllocateDeviceMemory(matrixSize);
+    int* gradientMagnitudeD = (int*)AllocateDeviceMemory(matrixSize);   // print
+
+    int* nonMaxSuppressedD = (int*)AllocateDeviceMemory(matrixSize);    // print
+
+    int* outputD = (int*)AllocateDeviceMemory(matrixSize);              // print
     
     float* filterD = (float*)AllocateDeviceMemory(kernelSize * kernelSize * sizeof(float));
     int32_t* countD = (int32_t*)AllocateDeviceMemory(sizeof(int32_t));
-
-    // cudaMemSet(outputD, 0, matrixSize);
     
     CopyToDevice(&(input[0]), inputD, matrixSize);
+    CopyToDevice(&(gaussianBlur[0]), gaussianBlurD, matrixSize);
+    CopyToDevice(&(Ix[0]), IxD, matrixSize);
+    CopyToDevice(&(Iy[0]), IyD, matrixSize);
+    CopyToDevice(&(gradientMag[0]), gradientMagnitudeD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
+
     CopyToDevice(&(filter[0]), filterD, kernelSize * kernelSize * sizeof(float));
     CopyToDevice(&count, countD, sizeof(int32_t));
 
@@ -58,11 +63,30 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     // 600  = 8 * 75
     // 4 = 1  * 4
     // 600x384 = 8,8 x 75, 48
-    //384 = 8 * 48
+    // 384 = 8 * 48
 
     // TODO: cleanup later
     // only works for images that are square and divisible by 64
-    dim3 threadsPerBlock(8, 8);
+    if (height != width) {
+        printf("not supported rn\n");
+        return -1;
+    }
+
+    dim3 threadsPerBlock(1,1);
+
+    if ((height * width) % 64 == 0) 
+        dim3 threadsPerBlock(8, 8);
+    else if ((height * width) % 16 == 0)
+        dim3 threadsPerBlock(4, 4); 
+    else if ((height * width) % 4 == 0)
+        dim3 threadsPerBlock(2, 2);
+    else if ((height * width) % 1 == 0)
+        dim3 threadsPerBlock(1, 1);
+    else {
+        printf("literally how? \n");
+        return -1;
+    }
+
     dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
 
     // make kernel calls ---------------------------------------------------------------------------------------
@@ -77,19 +101,30 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
+    CopyFromDevice(gaussianBlurD, &(gaussianBlur[0]), matrixSize);
+    CopyFromDevice(IxD, &(Ix[0]), matrixSize);
+    CopyFromDevice(IyD, &(Iy[0]), matrixSize);
+    CopyFromDevice(gradientMagnitudeD, &(gradientMag[0]), matrixSize);
     CopyFromDevice(outputD, &(output[0]), matrixSize);
     CopyFromDevice(countD, &count, sizeof(int32_t));
+
     cudaFree(inputD);
+    cudaFree(gaussianBlurD);
+    cudaFree(IxD);
+    cudaFree(IyD);
+    cudaFree(gradientMagnitudeD);
+    cudaFree(nonMaxSuppressedD);
     cudaFree(outputD);
     cudaFree(filterD);
     cudaFree(countD);
-    free(gradientDir);
 
     printf("\n\ndone with canny algorithm\n");
 
     clock_t difference = clock() - before;
     int msec = difference * 1000 / CLOCKS_PER_SEC;
     printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+
+    return 0;
 }
 
 /*
