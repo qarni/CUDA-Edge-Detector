@@ -21,8 +21,8 @@ __device__ int getPixelVal(int* image, int height, int width, int x, int y);
 /*
 * Wrapper function to make kernel calls to perform canny algorithm 
 */
-int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* output, 
-    int height, int width, int kernelSize,  int sigma) {
+int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* nonMaximumSuppressed, int* doubleThreshold, int* output, 
+    int height, int width, int kernelSize,  int sigma, double lowerThreshold, double upperThreshold) {
 
     clock_t before = clock();
 
@@ -42,6 +42,8 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
 
     int* nonMaxSuppressedD = (int*)AllocateDeviceMemory(matrixSize);    // print
 
+    int* doubleThresholdD = (int*)AllocateDeviceMemory(matrixSize);     // print
+
     int* outputD = (int*)AllocateDeviceMemory(matrixSize);              // print
     
     float* filterD = (float*)AllocateDeviceMemory(kernelSize * kernelSize * sizeof(float));
@@ -52,6 +54,8 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     CopyToDevice(&(Ix[0]), IxD, matrixSize);
     CopyToDevice(&(Iy[0]), IyD, matrixSize);
     CopyToDevice(&(gradientMag[0]), gradientMagnitudeD, matrixSize);
+    CopyToDevice(&(nonMaximumSuppressed[0]), nonMaxSuppressedD, matrixSize);
+    CopyToDevice(&(doubleThreshold[0]), doubleThresholdD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
 
     CopyToDevice(&(filter[0]), filterD, kernelSize * kernelSize * sizeof(float));
@@ -105,6 +109,8 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     CopyFromDevice(IxD, &(Ix[0]), matrixSize);
     CopyFromDevice(IyD, &(Iy[0]), matrixSize);
     CopyFromDevice(gradientMagnitudeD, &(gradientMag[0]), matrixSize);
+    CopyFromDevice(nonMaxSuppressedD, &(nonMaximumSuppressed[0]), matrixSize);
+    CopyFromDevice(doubleThresholdD, &(doubleThreshold[0]), matrixSize);
     CopyFromDevice(outputD, &(output[0]), matrixSize);
     CopyFromDevice(countD, &count, sizeof(int32_t));
 
@@ -114,42 +120,22 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     cudaFree(IyD);
     cudaFree(gradientMagnitudeD);
     cudaFree(nonMaxSuppressedD);
+    cudaFree(doubleThresholdD);
     cudaFree(outputD);
     cudaFree(filterD);
     cudaFree(countD);
 
-    printf("\n\ndone with canny algorithm\n");
+    printf("\ndone with canny algorithm\n\n");
 
     clock_t difference = clock() - before;
     int msec = difference * 1000 / CLOCKS_PER_SEC;
-    printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
+    printf("Time taken: approx %d second(s) (%d milliseconds)\n", msec/1000, msec%1000);
+    if(msec < 1000) 
+        printf("oh that is fast!\n");
 
     return 0;
 }
 
-/*
-* This is the guassian filter to be applied over each pixel in the image
-*
-* G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
-*/
-float* generateGaussianFilter(int kernelSize, int sigma) {
-
-    float* filter  = (float*) malloc(kernelSize * kernelSize * sizeof(float));
-
-    float div = 2.0 * sigma *  sigma;
-    float pre = 1.0 / (M_PI * div);
-
-    int i  = 0;
-    
-    for (int x = -2; x <= 2; x++) { 
-        for (int y = -2; y <= 2; y++) { 
-            filter[i] = pre * pow(M_E, -((pow(x,2) + pow(y, 2)) / div));
-            i++;
-        }
-    }
-
-    return filter;
-}
 
 // kernel functions --------------------------------------------------------------------
 
@@ -368,6 +354,31 @@ __device__ int getPixelVal(int* image, int height, int width, int row, int col) 
 }
 
 // helper functions -------------------------------------------------------------------
+
+/*
+* This is the guassian filter to be applied over each pixel in the image
+*
+* G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
+*/
+float* generateGaussianFilter(int kernelSize, int sigma) {
+
+    float* filter  = (float*) malloc(kernelSize * kernelSize * sizeof(float));
+    int kernelHalf = kernelSize/2;
+
+    float div = 2.0 * sigma *  sigma;
+    float pre = 1.0 / (M_PI * div);
+
+    int i  = 0;
+    
+    for (int x = -kernelHalf; x <= kernelHalf; x++) { 
+        for (int y = -kernelHalf; y <= kernelHalf; y++) { 
+            filter[i] = pre * pow(M_E, -((pow(x,2) + pow(y, 2)) / div));
+            i++;
+        }
+    }
+
+    return filter;
+}
 
 void* AllocateDeviceMemory (int size){
     void* res;
