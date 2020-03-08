@@ -13,7 +13,8 @@
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
 __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
-__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width);
+__global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width);
+__global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,  int* Ix, int* Iy, int height, int width);
 
 // ------------------------------------------------------------------------------------
 
@@ -29,13 +30,22 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 
     int32_t count = 0;
 
+    int* gradientDir = (int*)malloc(sizeof(int) * height * width);
+
     int* inputD = (int*)AllocateDeviceMemory(matrixSize);
+    
     int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);
-    float* gradientDirD = (float*)AllocateDeviceMemory(matrixSize);
+    int* gradientDirD = (int*)AllocateDeviceMemory(matrixSize);
+    int* IxD = (int*)AllocateDeviceMemory(matrixSize);
+    int* IyD = (int*)AllocateDeviceMemory(matrixSize);
+
+    int* gradientMagnitudeD = (int*)AllocateDeviceMemory(matrixSize);
     int* outputD = (int*)AllocateDeviceMemory(matrixSize);
     
     float* filterD = (float*)AllocateDeviceMemory(kernelSize * kernelSize * sizeof(float));
     int32_t* countD = (int32_t*)AllocateDeviceMemory(sizeof(int32_t));
+
+    // cudaMemSet(outputD, 0, matrixSize);
     
     CopyToDevice(&(input[0]), inputD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
@@ -55,10 +65,15 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     dim3 threadsPerBlock(8, 8);
     dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
 
+    // make kernel calls ---------------------------------------------------------------------------------------
+
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
-    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, outputD, gradientDirD, height, width);
+    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, gradientMagnitudeD, gradientDirD, IxD, IyD, height, width);
+    cudaThreadSynchronize();
+
+    NonMaximumSuppression<<<numBlocks, threadsPerBlock>>>(gradientMagnitudeD, outputD, gradientDirD, IxD, IyD, height, width);
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
@@ -68,6 +83,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     cudaFree(outputD);
     cudaFree(filterD);
     cudaFree(countD);
+    free(gradientDir);
 
     printf("\n\ndone with canny algorithm\n");
 
@@ -81,7 +97,7 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 *
 * G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
 */
-float*  generateGaussianFilter(int kernelSize, int sigma) {
+float* generateGaussianFilter(int kernelSize, int sigma) {
 
     float* filter  = (float*) malloc(kernelSize * kernelSize * sizeof(float));
 
@@ -164,7 +180,7 @@ __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int
 * Also need this data for later:
 * slope O grad = arctan(Iy/Ix)
 */
-__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width) {
+__global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width) {
 
     // sobel filters. Apply both!
     int Kx[] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
@@ -196,17 +212,104 @@ __global__ void FindGradients(int* input, int* output, float* gradientDir, int h
             }
         }
 
+        Ix[width * row + col] = filteredValX;
+        Iy[width * row + col] = filteredValY;
+
         float sobel = sqrt(pow(filteredValX, 2) + pow(filteredValY, 2));
         
         // sobel filter output
         output[width * row + col] = (int)sobel;
 
-        //calc gradient direction
-        gradientDir[width * row + col] = atan(filteredValX/filteredValY);
+        // calc gradient direction
+        // convert from radians to degrees
+        gradientDir[width * row + col] = (int)(atan(filteredValX/filteredValY) * 180 / M_PI);
     }
 
     __syncthreads();
 
+}
+
+
+/*
+* The current image has thick and thin edges - the final image should have only thin edges
+* Find pixels with the maximum value in edge directions
+* 
+* If pixel has a higher magnitude than either of the pixels in its direction, keep pixel
+* Otherwise just make it black (0)
+* Uses interpolation with Ix from previous step
+*/
+__global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width) {
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int gradientAngle = getPixelVal(gradientDir, height, width, row, col);
+    if(gradientAngle == -1){
+        return;
+    }
+
+    int gradientMag = getPixelVal(input, height, width, row, col);
+
+    // account for borders of the image which can't have calculations done 
+    if(row < 1 || col < 1 || row > width - 2 || col > height - 2) {
+        output[width * row + col] = gradientMag;
+    }
+    // otherwise, do it
+    else {
+        int up1, up2, down1, down2;
+        int est;
+
+        // make sure that the angle is greater than 0 (not a negative angle) to make life easier for calculations
+        if (gradientAngle < 0) 
+            gradientAngle += 180;
+
+        // angle 0 - 45
+        if(gradientAngle >= 0 && gradientAngle < 45) { 
+
+            up1 = getPixelVal(input, height, width, row, col - 1);
+            up2 = getPixelVal(input, height, width, row - 1, col - 1);
+            down1 = getPixelVal(input, height, width, row, col + 1);
+            down2 = getPixelVal(input, height, width, row + 1, col + 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 45 - 90
+        else if(gradientAngle >= 45 && gradientAngle < 90) {
+
+            up1 = getPixelVal(input, height, width, row - 1, col);
+            up2 = getPixelVal(input, height, width, row - 1, col - 1);
+            down1 = getPixelVal(input, height, width, row, col + 1);
+            down2 = getPixelVal(input, height, width, row + 1, col + 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 90 - 135
+        else if(gradientAngle >= 90 && gradientAngle < 135) {
+
+            up1 = getPixelVal(input, height, width, row - 1, col);
+            up2 = getPixelVal(input, height, width, row - 1, col + 1);
+            down1 = getPixelVal(input, height, width, row + 1, col);
+            down2 = getPixelVal(input, height, width, row + 1, col - 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 135 - 180
+        else if(gradientAngle >= 135 && gradientAngle < 180) {
+
+            up1 = getPixelVal(input, height, width, row, col + 1);
+            up2 = getPixelVal(input, height, width, row - 1, col + 1);
+            down1 = getPixelVal(input, height, width, row, col - 1);
+            down2 = getPixelVal(input, height, width, row + 1, col - 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+
+        if ((gradientMag >= (down2-down1) * est + down1) && (gradientMag >= (up2 - up1) * est + up1))
+            output[width * row + col] = gradientMag;
+        else
+            output[width * row + col] = 0;
+    
+    }
 }
 
 // device functions --------------------------------------------------------------------
