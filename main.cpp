@@ -77,7 +77,8 @@ int main(int argc, const char **argv)
         writeMatrixToFile(Ix, "output_matrix/Ix.txt", width, height);
         writeMatrixToFile(Iy, "output_matrix/Iy.txt", width, height);
         writeMatrixToFile(gradientMag, "output_matrix/gradientMag.txt", width, height);
-        writeMatrixToFile(output, "output_matrix/output.txt", width, height);
+        writeMatrixToFile(nonMaximumSupression, "output_matrix/nonMaximumSupression.txt", width, height);
+        writeMatrixToFile(output, "output_matrix/strongEdges.txt", width, height);
 
         // test to make sure output doesnt have a -1
         cout << "in " << input[1] << " out " << output[1] << endl;

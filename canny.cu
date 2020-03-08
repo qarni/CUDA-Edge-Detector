@@ -12,6 +12,7 @@
 __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
 __global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width);
 __global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,  int* Ix, int* Iy, int height, int width);
+__global__ void DoubleThreshold(int* input, int* output, int max, double lowerThresholdRatio, double upperThresholdRatio, int height, int width);
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
@@ -22,7 +23,7 @@ __device__ int getPixelVal(int* image, int height, int width, int x, int y);
 * Wrapper function to make kernel calls to perform canny algorithm 
 */
 int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* nonMaximumSuppressed, int* doubleThreshold, int* output, 
-    int height, int width, int kernelSize,  int sigma, double lowerThreshold, double upperThreshold) {
+    int height, int width, int kernelSize, int sigma, double lowerThreshold, double upperThreshold) {
 
     clock_t before = clock();
 
@@ -98,10 +99,19 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
+
+
     FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, gradientMagnitudeD, gradientDirD, IxD, IyD, height, width);
     cudaThreadSynchronize();
 
-    NonMaximumSuppression<<<numBlocks, threadsPerBlock>>>(gradientMagnitudeD, outputD, gradientDirD, IxD, IyD, height, width);
+    NonMaximumSuppression<<<numBlocks, threadsPerBlock>>>(gradientMagnitudeD, nonMaxSuppressedD, gradientDirD, IxD, IyD, height, width);
+    cudaThreadSynchronize();
+
+    CopyFromDevice(nonMaxSuppressedD, &(nonMaximumSuppressed[0]), matrixSize);
+    // get the maximum value
+    int max = getMaxValue(nonMaximumSuppressed, height*width);
+
+    DoubleThreshold<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, outputD, max, lowerThreshold, upperThreshold, height, width);
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
@@ -109,7 +119,7 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     CopyFromDevice(IxD, &(Ix[0]), matrixSize);
     CopyFromDevice(IyD, &(Iy[0]), matrixSize);
     CopyFromDevice(gradientMagnitudeD, &(gradientMag[0]), matrixSize);
-    CopyFromDevice(nonMaxSuppressedD, &(nonMaximumSuppressed[0]), matrixSize);
+    
     CopyFromDevice(doubleThresholdD, &(doubleThreshold[0]), matrixSize);
     CopyFromDevice(outputD, &(output[0]), matrixSize);
     CopyFromDevice(countD, &count, sizeof(int32_t));
@@ -135,7 +145,6 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
 
     return 0;
 }
-
 
 // kernel functions --------------------------------------------------------------------
 
@@ -329,9 +338,43 @@ __global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,
             output[width * row + col] = gradientMag;
         else
             output[width * row + col] = 0;
-    
     }
+
+    __syncthreads();
 }
+
+/*
+* Mark each pixel as strong, weak or irrelevant
+* irrelevant pixels are turned black if they arent already
+* Weak pixels are examined in the next step
+* 
+* strong = 255
+* weak = 1
+* irrelevant = 0
+*/
+__global__ void DoubleThreshold(int* input, int* output, int max, double lowerThresholdRatio, double upperThresholdRatio, int height, int width) {
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int val = getPixelVal(input, height, width, row, col);
+    if(val == -1){
+        return;
+    }
+
+    int upperThresholdVal = max * upperThresholdRatio;
+    int lowerThresholdVal = upperThresholdVal * lowerThresholdRatio;
+
+    if (val > upperThresholdVal)
+        output[width * row + col] = 255;    // strong
+    else if (val > lowerThresholdVal)
+        output[width * row + col] = 1;      // weak
+    else
+        output[width * row + col] = 0;      // irrelevant
+
+    __syncthreads();
+}
+
 
 // device functions --------------------------------------------------------------------
 // can only be called from global func or from another device func, not from host
@@ -378,6 +421,18 @@ float* generateGaussianFilter(int kernelSize, int sigma) {
     }
 
     return filter;
+}
+
+int getMaxValue(int* input, int size) {
+    int max = 0;
+    
+    for(int i  = 0; i < size; i++) {
+        int curr = input[i];
+        if (curr > max)
+            max = curr;
+    }
+
+    return max;
 }
 
 void* AllocateDeviceMemory (int size){
