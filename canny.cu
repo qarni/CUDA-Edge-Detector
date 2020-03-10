@@ -78,7 +78,7 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
         return -1;
     }
 
-    dim3 threadsPerBlock(1,1);
+    dim3 threadsPerBlock(8,8);
 
     if ((height * width) % 64 == 0) 
         dim3 threadsPerBlock(8, 8);
@@ -96,8 +96,11 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
 
     // make kernel calls ---------------------------------------------------------------------------------------
+    
+    int space = (threadsPerBlock.x + kernelSize) * (threadsPerBlock.y + kernelSize);
+    printf("space allocated: %d\n", space );
 
-    GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
+    GaussianBlur<<<numBlocks,threadsPerBlock, space * sizeof(int32_t)>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
     FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, gradientMagnitudeD, gradientDirD, IxD, IyD, height, width);
@@ -163,6 +166,16 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
 */
 __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width) {
 
+    // TODO: implement shared memory for input so we dont have to read it so many times (x6 per thread)
+    // each thread in a block can load in one index of memory
+    // the threads on the edges of the blocks can load in extra(?) or just read from input for those
+    // blockId = block size / num threads, goes from 0 - this val
+    // the index will be threadIdx.x + kernelSize, threadIdx.y + kernelSize
+
+    // dynamically allocated by the kernel call to be of size: (numThreads.x + kernelSize) * (Numthreads.x + kernelSize)
+    // which means each index will be (blockDim.x + kernelSize) * (threadIdx.x) + (threadIdx.y)
+    extern __shared__ int32_t sharedMem[];
+
     int row = (blockIdx.x * blockDim.x) + threadIdx.x;
     int col = (blockIdx.y * blockDim.y) + threadIdx.y;
 
@@ -172,24 +185,88 @@ __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int
     if(val == -1){
         return;
     }
-        
+
     int kernelHalf = kernelSize/2;
+
+    // load one pixel in per thread
+    int s_width = blockDim.x + (kernelSize);
+    int s_height = blockDim.y + (kernelSize);
+    int s_row = threadIdx.x + kernelHalf;
+    int s_col = threadIdx.y + kernelHalf;
+    int currIndex = s_width * s_row + s_col;
+
+    sharedMem[currIndex] = val;
+
+    __syncthreads();
+
+    // load extra for the borders...
+    // add checks if the current block id is at the border of the full grid
+
+    if (threadIdx.x == 0 && blockIdx.y != 0) {
+        for (int i = kernelHalf; i > 0; i--){
+            int cval = getPixelVal(input, height, width, row, col - i);
+            if (cval != -1 )
+                sharedMem[s_width * s_row + (s_col - i)] = cval;
+            else
+                sharedMem[s_width * s_row + (s_col - i)] = 0;
+        }
+    }
+    if (threadIdx.y == 0 && blockIdx.x != 0) {
+        for (int i = kernelHalf; i > 0; i--){
+            int cval = getPixelVal(input, height, width, row - i, col);
+            if (cval != -1)
+                sharedMem[s_width * (s_row - i) + s_col] = cval;
+            else
+                sharedMem[s_width * (s_row - i) + s_col] = 0;
+        }
+    }
+    if (threadIdx.x == blockDim.x - 1 && blockIdx.y != gridDim.y - 1) {
+        for (int i = 0; i < kernelHalf; i++){
+            int cval = getPixelVal(input, height, width, row, col + i);
+            if (cval != -1)
+                sharedMem[s_width * s_row + (s_col + i)] = cval;
+            else
+                sharedMem[s_width * s_row + (s_col + i)] = 0;
+        }
+    }
+    if (threadIdx.y == blockDim.x - 1 && blockIdx.x != gridDim.x - 1) {
+        for (int i = 0; i < kernelHalf; i++){
+            int cval = getPixelVal(input, height, width, row + i, col);
+            if (cval != -1)
+                sharedMem[s_width * (s_row + i) + s_col] = cval;
+            else
+                sharedMem[s_width * (s_row + i) + s_col] = 0;
+        }
+    }
+
+    __syncthreads();    // wait for all threads to finish
+
 
     // account for borders of the image which can't have the filter applied to them
     if(row < kernelHalf || col < kernelHalf || row > width - 1 - kernelHalf || col > height - 1 - kernelHalf) {
         output[width * row + col] = val;
     }
-    // otherwise, apply the filter!
     else {
-
+        
+        // otherwise, apply the filter!
         float filteredVal = 0.0;
+        float sharedVal = 0.0;
         int f = 0;
         for(int krow = -kernelHalf; krow <= kernelHalf; krow++) {
             for(int kcol = -kernelHalf; kcol <= kernelHalf; kcol++) {
-                filteredVal += (float)getPixelVal(input, height, width, row + krow, col + kcol) * gaussianFilter[f];
+                filteredVal += (float) getPixelVal(input, height, width, row + krow, col + kcol) * gaussianFilter[f];
+                sharedVal += (float) getPixelVal(sharedMem, s_height, s_width, s_row + krow, s_col + kcol) * gaussianFilter[f];
+
+                if (getPixelVal(input, height, width, row + krow, col + kcol) != getPixelVal(sharedMem, s_height, s_width, s_row + krow, s_col + kcol)) {
+                    printf("%d-%d r %d %d c %d %d\n", getPixelVal(input, height, width, row + krow, col + kcol), getPixelVal(sharedMem, s_height, s_width, s_row + krow, s_col + kcol), row, s_row, col, s_col);
+                }
                 f++;
             }
         }
+
+        // if(sharedVal != filteredVal)
+        //     printf("DOES NOT MATCH %lf %lf |", sharedVal, filteredVal);
+
         
         output[width * row + col] = (int)filteredVal;
     }
@@ -452,7 +529,7 @@ __device__ int getPixelVal(int* image, int height, int width, int row, int col) 
     if (col < height && row < width && col >= 0 && row >= 0)
         return *(image + width * row + col);
     else{
-        printf("CRAP");
+        printf("CRAP height: %d width: %d row: %d col: %d\n", height, width, row, col);
         return -1;
     }
 }
