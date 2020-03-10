@@ -9,18 +9,22 @@
 #include "canny.h"
 
 // kernel function definitions
+__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
+__global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width);
+__global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,  int* Ix, int* Iy, int height, int width);
+__global__ void DoubleThreshold(int* input, int* output, int max, double lowerThresholdRatio, double upperThresholdRatio, int height, int width);
+__global__ void Hysteresis(int* nonMaximumSuppressed, int* intensity, int* output, int height, int width);
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
-__global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int kernelSize, int32_t* count, int height, int width);
-__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width);
 
 // ------------------------------------------------------------------------------------
 
 /*
 * Wrapper function to make kernel calls to perform canny algorithm 
 */
-void canny(int* input, int height, int width, int* output, int kernelSize,  int sigma) {
+int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int* nonMaximumSuppressed, int* doubleThreshold, int* output, 
+    int height, int width, int kernelSize, int sigma, double lowerThreshold, double upperThreshold) {
 
     clock_t before = clock();
 
@@ -29,16 +33,33 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
 
     int32_t count = 0;
 
-    int* inputD = (int*)AllocateDeviceMemory(matrixSize);
-    int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);
-    float* gradientDirD = (float*)AllocateDeviceMemory(matrixSize);
-    int* outputD = (int*)AllocateDeviceMemory(matrixSize);
+    int* inputD = (int*)AllocateDeviceMemory(matrixSize);               // print
+    
+    int* gaussianBlurD = (int*)AllocateDeviceMemory(matrixSize);        // print
+    int* gradientDirD = (int*)AllocateDeviceMemory(matrixSize);
+    int* IxD = (int*)AllocateDeviceMemory(matrixSize);                  // print
+    int* IyD = (int*)AllocateDeviceMemory(matrixSize);                  // print
+
+    int* gradientMagnitudeD = (int*)AllocateDeviceMemory(matrixSize);   // print
+
+    int* nonMaxSuppressedD = (int*)AllocateDeviceMemory(matrixSize);    // print
+
+    int* doubleThresholdD = (int*)AllocateDeviceMemory(matrixSize);     // print
+
+    int* outputD = (int*)AllocateDeviceMemory(matrixSize);              // print
     
     float* filterD = (float*)AllocateDeviceMemory(kernelSize * kernelSize * sizeof(float));
     int32_t* countD = (int32_t*)AllocateDeviceMemory(sizeof(int32_t));
     
     CopyToDevice(&(input[0]), inputD, matrixSize);
+    CopyToDevice(&(gaussianBlur[0]), gaussianBlurD, matrixSize);
+    CopyToDevice(&(Ix[0]), IxD, matrixSize);
+    CopyToDevice(&(Iy[0]), IyD, matrixSize);
+    CopyToDevice(&(gradientMag[0]), gradientMagnitudeD, matrixSize);
+    CopyToDevice(&(nonMaximumSuppressed[0]), nonMaxSuppressedD, matrixSize);
+    CopyToDevice(&(doubleThreshold[0]), doubleThresholdD, matrixSize);
     CopyToDevice(&(output[0]), outputD, matrixSize);
+
     CopyToDevice(&(filter[0]), filterD, kernelSize * kernelSize * sizeof(float));
     CopyToDevice(&count, countD, sizeof(int32_t));
 
@@ -48,56 +69,83 @@ void canny(int* input, int height, int width, int* output, int kernelSize,  int 
     // 600  = 8 * 75
     // 4 = 1  * 4
     // 600x384 = 8,8 x 75, 48
-    //384 = 8 * 48
+    // 384 = 8 * 48
 
     // TODO: cleanup later
     // only works for images that are square and divisible by 64
-    dim3 threadsPerBlock(8, 8);
+    if (height != width) {
+        printf("not supported rn\n");
+        return -1;
+    }
+
+    dim3 threadsPerBlock(1,1);
+
+    if ((height * width) % 64 == 0) 
+        dim3 threadsPerBlock(8, 8);
+    else if ((height * width) % 16 == 0)
+        dim3 threadsPerBlock(4, 4); 
+    else if ((height * width) % 4 == 0)
+        dim3 threadsPerBlock(2, 2);
+    else if ((height * width) % 1 == 0)
+        dim3 threadsPerBlock(1, 1);
+    else {
+        printf("literally how? \n");
+        return -1;
+    }
+
     dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
+
+    // make kernel calls ---------------------------------------------------------------------------------------
 
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
-    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, outputD, gradientDirD, height, width);
+    FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, gradientMagnitudeD, gradientDirD, IxD, IyD, height, width);
+    cudaThreadSynchronize();
+
+    NonMaximumSuppression<<<numBlocks, threadsPerBlock>>>(gradientMagnitudeD, nonMaxSuppressedD, gradientDirD, IxD, IyD, height, width);
+    cudaThreadSynchronize();
+
+    CopyFromDevice(nonMaxSuppressedD, &(nonMaximumSuppressed[0]), matrixSize);
+    // get the maximum value
+    int max = getMaxValue(nonMaximumSuppressed, height*width);
+
+    DoubleThreshold<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, doubleThresholdD, max, lowerThreshold, upperThreshold, height, width);
+    cudaThreadSynchronize();
+
+    Hysteresis<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, doubleThresholdD, outputD, height, width);    
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
+    CopyFromDevice(gaussianBlurD, &(gaussianBlur[0]), matrixSize);
+    CopyFromDevice(IxD, &(Ix[0]), matrixSize);
+    CopyFromDevice(IyD, &(Iy[0]), matrixSize);
+    CopyFromDevice(gradientMagnitudeD, &(gradientMag[0]), matrixSize);
+    
+    CopyFromDevice(doubleThresholdD, &(doubleThreshold[0]), matrixSize);
     CopyFromDevice(outputD, &(output[0]), matrixSize);
     CopyFromDevice(countD, &count, sizeof(int32_t));
+
     cudaFree(inputD);
+    cudaFree(gaussianBlurD);
+    cudaFree(IxD);
+    cudaFree(IyD);
+    cudaFree(gradientMagnitudeD);
+    cudaFree(nonMaxSuppressedD);
+    cudaFree(doubleThresholdD);
     cudaFree(outputD);
     cudaFree(filterD);
     cudaFree(countD);
 
-    printf("\n\ndone with canny algorithm\n");
+    printf("\ndone with canny algorithm\n\n");
 
     clock_t difference = clock() - before;
     int msec = difference * 1000 / CLOCKS_PER_SEC;
-    printf("Time taken %d seconds %d milliseconds\n", msec/1000, msec%1000);
-}
+    printf("Time taken: approx %d second(s) (%d milliseconds)\n", msec/1000, msec%1000);
+    if(msec < 1000) 
+        printf("oh that is fast!\n");
 
-/*
-* This is the guassian filter to be applied over each pixel in the image
-*
-* G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
-*/
-float*  generateGaussianFilter(int kernelSize, int sigma) {
-
-    float* filter  = (float*) malloc(kernelSize * kernelSize * sizeof(float));
-
-    float div = 2.0 * sigma *  sigma;
-    float pre = 1.0 / (M_PI * div);
-
-    int i  = 0;
-    
-    for (int x = -2; x <= 2; x++) { 
-        for (int y = -2; y <= 2; y++) { 
-            filter[i] = pre * pow(M_E, -((pow(x,2) + pow(y, 2)) / div));
-            i++;
-        }
-    }
-
-    return filter;
+    return 0;
 }
 
 // kernel functions --------------------------------------------------------------------
@@ -164,7 +212,7 @@ __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int
 * Also need this data for later:
 * slope O grad = arctan(Iy/Ix)
 */
-__global__ void FindGradients(int* input, int* output, float* gradientDir, int height, int width) {
+__global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width) {
 
     // sobel filters. Apply both!
     int Kx[] = {-1, 0, 1, -2, 0, 2, -1, 0, 1};
@@ -196,17 +244,197 @@ __global__ void FindGradients(int* input, int* output, float* gradientDir, int h
             }
         }
 
+        Ix[width * row + col] = filteredValX;
+        Iy[width * row + col] = filteredValY;
+
         float sobel = sqrt(pow(filteredValX, 2) + pow(filteredValY, 2));
         
         // sobel filter output
         output[width * row + col] = (int)sobel;
 
-        //calc gradient direction
-        gradientDir[width * row + col] = atan(filteredValX/filteredValY);
+        // calc gradient direction
+        // convert from radians to degrees
+        gradientDir[width * row + col] = (int)(atan(filteredValX/filteredValY) * 180 / M_PI);
     }
 
     __syncthreads();
 
+}
+
+
+/*
+* The current image has thick and thin edges - the final image should have only thin edges
+* Find pixels with the maximum value in edge directions
+* 
+* If pixel has a higher magnitude than either of the pixels in its direction, keep pixel
+* Otherwise just make it black (0)
+* Uses interpolation with Ix from previous step
+*/
+__global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width) {
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int gradientAngle = getPixelVal(gradientDir, height, width, row, col);
+    if(gradientAngle == -1){
+        return;
+    }
+
+    int gradientMag = getPixelVal(input, height, width, row, col);
+
+    // account for borders of the image which can't have calculations done 
+    if(row < 1 || col < 1 || row > width - 2 || col > height - 2) {
+        output[width * row + col] = 0;
+    }
+    // otherwise, do it
+    else {
+        int up1, up2, down1, down2;
+        int est;
+
+        // make sure that the angle is greater than 0 (not a negative angle) to make life easier for calculations
+        if (gradientAngle < 0) 
+            gradientAngle += 180;
+
+        // angle 0 - 45
+        if(gradientAngle >= 0 && gradientAngle < 45) { 
+
+            up1 = getPixelVal(input, height, width, row, col - 1);
+            up2 = getPixelVal(input, height, width, row - 1, col - 1);
+            down1 = getPixelVal(input, height, width, row, col + 1);
+            down2 = getPixelVal(input, height, width, row + 1, col + 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 45 - 90
+        else if(gradientAngle >= 45 && gradientAngle < 90) {
+
+            up1 = getPixelVal(input, height, width, row - 1, col);
+            up2 = getPixelVal(input, height, width, row - 1, col - 1);
+            down1 = getPixelVal(input, height, width, row, col + 1);
+            down2 = getPixelVal(input, height, width, row + 1, col + 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 90 - 135
+        else if(gradientAngle >= 90 && gradientAngle < 135) {
+
+            up1 = getPixelVal(input, height, width, row - 1, col);
+            up2 = getPixelVal(input, height, width, row - 1, col + 1);
+            down1 = getPixelVal(input, height, width, row + 1, col);
+            down2 = getPixelVal(input, height, width, row + 1, col - 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+        // angle 135 - 180
+        else if(gradientAngle >= 135 && gradientAngle < 180) {
+
+            up1 = getPixelVal(input, height, width, row, col + 1);
+            up2 = getPixelVal(input, height, width, row - 1, col + 1);
+            down1 = getPixelVal(input, height, width, row, col - 1);
+            down2 = getPixelVal(input, height, width, row + 1, col - 1);
+
+            est = abs(getPixelVal(Ix, height, width, row, col) / gradientMag);
+        }
+
+        if ((gradientMag >= (down2-down1) * est + down1) && (gradientMag >= (up2 - up1) * est + up1))
+            output[width * row + col] = gradientMag;
+        else
+            output[width * row + col] = 0;
+    }
+
+    __syncthreads();
+}
+
+/*
+* Mark each pixel as strong, weak or irrelevant
+* irrelevant pixels are turned black if they arent already
+* Weak pixels are examined in the next step
+* 
+* strong = 255
+* weak = 1
+* irrelevant = 0
+*/
+__global__ void DoubleThreshold(int* input, int* output, int max, double lowerThresholdRatio, double upperThresholdRatio, int height, int width) {
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int val = getPixelVal(input, height, width, row, col);
+    if(val == -1){
+        return;
+    }
+
+    int upperThresholdVal = max * upperThresholdRatio;
+    int lowerThresholdVal = upperThresholdVal * lowerThresholdRatio;
+
+    if (val > upperThresholdVal)
+        output[width * row + col] = 255;    // strong
+    else if (val > lowerThresholdVal)
+        output[width * row + col] = 1;      // weak
+    else
+        output[width * row + col] = 0;      // irrelevant
+
+    __syncthreads();
+}
+
+/*
+* Get rid of irrelevant pixels (make 0)
+* Keep strong pixels
+* Weak pixel: only keep if one of the surrounding pixels is strong
+*/
+__global__ void Hysteresis(int* nonMaximumSuppressed, int* intensity, int* output, int height, int width) {
+
+    int STRONG = 255;
+    int WEAK = 1;
+    int IRRELEVANT = 0;
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int val = getPixelVal(nonMaximumSuppressed, height, width, row, col);
+    int strength = getPixelVal(intensity, height, width, row, col);
+    if(val == -1){
+        return;
+    }
+
+    // account for borders of the image which can't have calculations done 
+    if(row < 1 || col < 1 || row > width - 2 || col > height - 2) {
+        output[width * row + col] = 0;
+    }
+    // otherwise, do it
+    else {
+        if (strength == STRONG) {
+            output[width * row + col] = val;
+        }
+        else if (strength == IRRELEVANT)
+            output[width * row + col] = 0;
+        else if (strength == WEAK) {
+            int found = 0;
+            if (getPixelVal(intensity, height, width, row - 1, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col + 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col + 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col + 1)  == STRONG)
+                found = 1;
+            
+            if (found == 1)
+                output[width * row + col] = val;
+            else
+                output[width * row + col] = 0;
+        }
+    }
+
+    __syncthreads();
 }
 
 // device functions --------------------------------------------------------------------
@@ -230,6 +458,43 @@ __device__ int getPixelVal(int* image, int height, int width, int row, int col) 
 }
 
 // helper functions -------------------------------------------------------------------
+
+/*
+* This is the guassian filter to be applied over each pixel in the image
+*
+* G(x, y) = (1/2*pi*sigma^2)*e^-(x^2+y^2/2*sigma^2)
+*/
+float* generateGaussianFilter(int kernelSize, int sigma) {
+
+    float* filter  = (float*) malloc(kernelSize * kernelSize * sizeof(float));
+    int kernelHalf = kernelSize/2;
+
+    float div = 2.0 * sigma *  sigma;
+    float pre = 1.0 / (M_PI * div);
+
+    int i  = 0;
+    
+    for (int x = -kernelHalf; x <= kernelHalf; x++) { 
+        for (int y = -kernelHalf; y <= kernelHalf; y++) { 
+            filter[i] = pre * pow(M_E, -((pow(x,2) + pow(y, 2)) / div));
+            i++;
+        }
+    }
+
+    return filter;
+}
+
+int getMaxValue(int* input, int size) {
+    int max = 0;
+    
+    for(int i  = 0; i < size; i++) {
+        int curr = input[i];
+        if (curr > max)
+            max = curr;
+    }
+
+    return max;
+}
 
 void* AllocateDeviceMemory (int size){
     void* res;
