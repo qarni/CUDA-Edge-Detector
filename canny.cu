@@ -13,6 +13,7 @@ __global__ void GaussianBlur(int* input, int* output, float* gaussianFilter, int
 __global__ void FindGradients(int* input, int* output, int* gradientDir, int* Ix, int* Iy, int height, int width);
 __global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,  int* Ix, int* Iy, int height, int width);
 __global__ void DoubleThreshold(int* input, int* output, int max, double lowerThresholdRatio, double upperThresholdRatio, int height, int width);
+__global__ void Hysteresis(int* nonMaximumSuppressed, int* intensity, int* output, int height, int width);
 
 // device function defintions 
 __device__ int getPixelVal(int* image, int height, int width, int x, int y);
@@ -99,8 +100,6 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     GaussianBlur<<<numBlocks,threadsPerBlock>>>(inputD, gaussianBlurD, filterD, kernelSize, countD, height, width);
     cudaThreadSynchronize();
 
-
-
     FindGradients<<<numBlocks, threadsPerBlock>>>(gaussianBlurD, gradientMagnitudeD, gradientDirD, IxD, IyD, height, width);
     cudaThreadSynchronize();
 
@@ -111,7 +110,10 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
     // get the maximum value
     int max = getMaxValue(nonMaximumSuppressed, height*width);
 
-    DoubleThreshold<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, outputD, max, lowerThreshold, upperThreshold, height, width);
+    DoubleThreshold<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, doubleThresholdD, max, lowerThreshold, upperThreshold, height, width);
+    cudaThreadSynchronize();
+
+    Hysteresis<<<numBlocks, threadsPerBlock>>>(nonMaxSuppressedD, doubleThresholdD, outputD, height, width);    
     cudaThreadSynchronize();
 
     // tear down after kernel calls are done -------------------------------------------------------------------
@@ -282,7 +284,7 @@ __global__ void NonMaximumSuppression(int* input, int* output, int* gradientDir,
 
     // account for borders of the image which can't have calculations done 
     if(row < 1 || col < 1 || row > width - 2 || col > height - 2) {
-        output[width * row + col] = gradientMag;
+        output[width * row + col] = 0;
     }
     // otherwise, do it
     else {
@@ -375,6 +377,65 @@ __global__ void DoubleThreshold(int* input, int* output, int max, double lowerTh
     __syncthreads();
 }
 
+/*
+* Get rid of irrelevant pixels (make 0)
+* Keep strong pixels
+* Weak pixel: only keep if one of the surrounding pixels is strong
+*/
+__global__ void Hysteresis(int* nonMaximumSuppressed, int* intensity, int* output, int height, int width) {
+
+    int STRONG = 255;
+    int WEAK = 1;
+    int IRRELEVANT = 0;
+
+    int row = (blockIdx.x * blockDim.x) + threadIdx.x;
+    int col = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+    int val = getPixelVal(nonMaximumSuppressed, height, width, row, col);
+    int strength = getPixelVal(intensity, height, width, row, col);
+    if(val == -1){
+        return;
+    }
+
+    // account for borders of the image which can't have calculations done 
+    if(row < 1 || col < 1 || row > width - 2 || col > height - 2) {
+        output[width * row + col] = 0;
+    }
+    // otherwise, do it
+    else {
+        if (strength == STRONG) {
+            output[width * row + col] = val;
+        }
+        else if (strength == IRRELEVANT)
+            output[width * row + col] = 0;
+        else if (strength == WEAK) {
+            int found = 0;
+            if (getPixelVal(intensity, height, width, row - 1, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col + 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row - 1, col + 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col - 1) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col) == STRONG)
+                found = 1;
+            else if (getPixelVal(intensity, height, width, row + 1, col + 1)  == STRONG)
+                found = 1;
+            
+            if (found == 1)
+                output[width * row + col] = val;
+            else
+                output[width * row + col] = 0;
+        }
+    }
+
+    __syncthreads();
+}
 
 // device functions --------------------------------------------------------------------
 // can only be called from global func or from another device func, not from host
