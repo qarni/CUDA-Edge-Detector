@@ -78,22 +78,33 @@ int canny(int* input, int* gaussianBlur, int* Ix, int* Iy, int* gradientMag, int
         return -1;
     }
 
-    dim3 threadsPerBlock(8,8);
+    int xdim = 1, ydim =1;
 
-    if ((height * width) % 64 == 0) 
-        dim3 threadsPerBlock(8, 8);
+    if ((height * width) % 256 == 0) 
+        xdim = 16;
+    else if ((height * width) % 64 == 0) 
+        xdim = 8;
     else if ((height * width) % 16 == 0)
-        dim3 threadsPerBlock(4, 4); 
+        xdim = 4;
     else if ((height * width) % 4 == 0)
-        dim3 threadsPerBlock(2, 2);
+        xdim = 2;
     else if ((height * width) % 1 == 0)
-        dim3 threadsPerBlock(1, 1);
+        xdim = 1;
     else {
         printf("literally how? \n");
         return -1;
     }
 
-    dim3 numBlocks(height/threadsPerBlock.x, width/threadsPerBlock.y);
+    dim3 threadsPerBlock(xdim, xdim);
+    int blockx = height/threadsPerBlock.x;
+    int blocky = width/threadsPerBlock.y;
+    if (height % threadsPerBlock.x != 0)
+        blockx++;
+    if (width % threadsPerBlock.y != 0)
+        blocky++;
+
+    dim3 numBlocks(blockx, blocky);
+    printf("Dimensions: threadx %d thready %d | blockx %d blocky %d\n", threadsPerBlock.x, threadsPerBlock.y, numBlocks.x, numBlocks.y);
 
     // make kernel calls ---------------------------------------------------------------------------------------
     
